@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "863580669634",
+    "project_id": "ergodic-ai-photo-test-project",
+    "storage_bucket": "ergodic-ai-photo-test-project.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:863580669634:android:6334fcf4d91a8b4cd45d5b",
+        "android_client_info": {
+          "package_name": "com.ergodic.phototest.ergodic_photo_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjzMToaAYsXl_nX7YmMisRgfCDQ6DdsMc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
