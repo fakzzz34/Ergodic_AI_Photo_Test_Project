@@ -13,7 +13,11 @@ class FunctionsService {
   final StorageService _storageService = StorageService();
   final FirestoreService _firestoreService = FirestoreService();
 
-  Future<List<String>> generateImages(File imageFile, String userId) async {
+  Future<List<String>> generateImages(
+    File imageFile,
+    String userId,
+    List<String> scenes,
+  ) async {
     try {
       // Ensure Firebase is initialized (it usually is in main, but good to be safe)
       try {
@@ -50,11 +54,18 @@ class FunctionsService {
         'country farmhouse',
       ];
       final rng = Random();
-      final shuffled = List<String>.from(scenePool)..shuffle(rng);
-      final scenes = shuffled.take(4).toList();
+      final List<String> scenesToUse = List<String>.from(scenes);
+      if (scenesToUse.length < 4) {
+        final remaining =
+            scenePool.where((e) => !scenesToUse.contains(e)).toList()
+              ..shuffle(rng);
+        scenesToUse.addAll(remaining.take(4 - scenesToUse.length));
+      } else if (scenesToUse.length > 4) {
+        scenesToUse.removeRange(4, scenesToUse.length);
+      }
       final promptText =
           'Generate exactly 4 separate, standalone photorealistic images from this portrait. '
-          'Use these distinct scenes: (1) ${scenes[0]}, (2) ${scenes[1]}, (3) ${scenes[2]}, (4) ${scenes[3]}. '
+          'Use these distinct scenes: (1) ${scenesToUse[0]}, (2) ${scenesToUse[1]}, (3) ${scenesToUse[2]}, (4) ${scenesToUse[3]}. '
           'Maintain the person’s facial identity and hairstyle. High quality, Instagram-ready composition. '
           'Do NOT combine multiple scenes into a single collage, grid, split-screen, or multi-panel image. '
           'Return 4 image outputs only.';
@@ -93,10 +104,10 @@ class FunctionsService {
       }
 
       if (firebaseUrls.length < 4) {
-        final used = <String>{...scenes};
+        final used = <String>{...scenesToUse};
         int attempts = 0;
         while (firebaseUrls.length < 4 && attempts < 6) {
-          for (final s in scenes) {
+          for (final s in scenesToUse) {
             if (firebaseUrls.length >= 4) break;
             final c = Content.multi([
               TextPart(
@@ -118,7 +129,7 @@ class FunctionsService {
               ..shuffle(rng);
             final needed = 4 - firebaseUrls.length;
             final extra = remaining.take(needed).toList();
-            scenes
+            scenesToUse
               ..clear()
               ..addAll(extra);
             used.addAll(extra);

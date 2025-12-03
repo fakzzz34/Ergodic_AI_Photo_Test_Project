@@ -27,7 +27,28 @@ class _HomeScreenState extends State<HomeScreen>
   String? _errorMessage;
   File? _selectedImage;
   List<String> _generatedImageUrls = [];
+  bool _isSaving = false;
   late AnimationController _controller;
+  final List<String> _scenePool = const [
+    'café setting',
+    'city travel street',
+    'sunny beach',
+    'mountain hiking trail',
+    'coastal sunset cliffs',
+    'snowy cabin',
+    'desert road trip',
+    'rooftop skyline night',
+    'tropical waterfall',
+    'forest trail',
+    'museum or landmark',
+    'sailing boat',
+    'lakeside pier dawn',
+    'modern art gallery',
+    'country farmhouse',
+  ];
+  final List<String> _chosenScenes = [];
+  bool _customSceneEnabled = false;
+  final TextEditingController _customSceneController = TextEditingController();
 
   @override
   void initState() {
@@ -42,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _controller.dispose();
+    _customSceneController.dispose();
     super.dispose();
   }
 
@@ -53,12 +75,23 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _pickImage(ImageSource source) async {
+    print('picking image');
     try {
-      final XFile? pickedFile = await _picker.pickImage(source: source);
+      final XFile? pickedFile = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1600,
+        maxHeight: 1600,
+      );
+      print('picker dialog closed');
       if (pickedFile != null) {
+        print('Image picked');
         setState(() {
           _selectedImage = File(pickedFile.path);
           _generatedImageUrls = [];
+          _chosenScenes.clear();
+          _customSceneEnabled = false;
+          _customSceneController.clear();
           _status = AppStatus.initial;
         });
       }
@@ -82,10 +115,31 @@ class _HomeScreenState extends State<HomeScreen>
     });
 
     try {
+      // Build final scenes list (include custom if provided)
+      final List<String> scenes = List<String>.from(_chosenScenes);
+      final String custom = _customSceneController.text.trim();
+      if (_customSceneEnabled && custom.isNotEmpty) {
+        if (scenes.length < 4) {
+          scenes.add(custom);
+        } else {
+          scenes[3] = custom; // ensure max 4 by replacing last
+        }
+      }
+      if (scenes.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Please select scenes first")),
+          );
+        }
+        _openScenePicker();
+        return;
+      }
+
       // Generate Images
       final urls = await _functionsService.generateImages(
         _selectedImage!,
         user.uid,
+        scenes,
       );
 
       setState(() {
@@ -103,6 +157,12 @@ class _HomeScreenState extends State<HomeScreen>
     } catch (e) {
       _setError(e.toString());
     }
+  }
+
+  bool _hasSelectedScenes() {
+    final custom = _customSceneController.text.trim();
+    return _chosenScenes.isNotEmpty ||
+        (_customSceneEnabled && custom.isNotEmpty);
   }
 
   void _setError(String message) {
@@ -325,6 +385,7 @@ class _HomeScreenState extends State<HomeScreen>
         _status == AppStatus.uploading) {
       return _buildLoadingView();
     } else if (_selectedImage != null) {
+      print('preview View');
       return _buildPreviewView();
     } else {
       return _buildEmptyState();
@@ -385,47 +446,228 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildPreviewView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Hero(
-              tag: 'image_preview',
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(32),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 40,
-                      offset: const Offset(0, 20),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(32),
-                  child: Image.file(
-                    _selectedImage!,
-                    height: 450,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Hero(
+            tag: 'image_preview',
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(32),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
                   ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(32),
+                child: Image.file(
+                  _selectedImage!,
+                  height: MediaQuery.of(context).size.height * 0.45,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
                 ),
               ),
             ),
-            const SizedBox(height: 32),
-            Text(
-              "Ready to Remix",
-              style: GoogleFonts.dmSans(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            "Ready to Remix",
+            style: GoogleFonts.dmSans(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            "Choose up to 4 scenes",
+            style: GoogleFonts.dmSans(fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _openScenePicker,
+            icon: const Icon(Icons.arrow_drop_down),
+            label: const Text("Select Scenes"),
+          ),
+          const SizedBox(height: 8),
+          if (_chosenScenes.isNotEmpty ||
+              (_customSceneEnabled &&
+                  _customSceneController.text.trim().isNotEmpty))
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ..._chosenScenes.map((s) => Chip(label: Text(s))),
+                if (_customSceneEnabled &&
+                    _customSceneController.text.trim().isNotEmpty)
+                  Chip(label: Text(_customSceneController.text.trim())),
+              ],
+            ),
+          const SizedBox(height: 16),
+        ],
       ),
+    );
+  }
+
+  void _openScenePicker() {
+    final Set<String> temp = Set<String>.from(_chosenScenes);
+    bool tempOther = _customSceneEnabled;
+    final TextEditingController tempController = TextEditingController(
+      text: _customSceneController.text,
+    );
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return DraggableScrollableSheet(
+              expand: false,
+              initialChildSize: 0.6,
+              minChildSize: 0.4,
+              maxChildSize: 0.9,
+              builder: (context, scrollController) {
+                final customText = tempController.text.trim();
+                final int customCount = (tempOther && customText.isNotEmpty)
+                    ? 1
+                    : 0;
+                final int allowedMax = 4 - customCount;
+                final int selectedCount = temp.length + customCount;
+                return Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            "Select Scenes",
+                            style: GoogleFonts.dmSans(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            "$selectedCount/4",
+                            style: GoogleFonts.dmSans(fontSize: 14),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: ListView.builder(
+                          controller: scrollController,
+                          itemCount: _scenePool.length,
+                          itemBuilder: (context, index) {
+                            final s = _scenePool[index];
+                            final selected = temp.contains(s);
+                            final canSelectMore = temp.length < allowedMax;
+                            return CheckboxListTile(
+                              title: Text(s, style: GoogleFonts.dmSans()),
+                              value: selected,
+                              onChanged: (!selected && !canSelectMore)
+                                  ? null
+                                  : (val) {
+                                      setModalState(() {
+                                        if (val == true) {
+                                          if (temp.length < allowedMax) {
+                                            temp.add(s);
+                                          }
+                                        } else {
+                                          temp.remove(s);
+                                        }
+                                      });
+                                    },
+                            );
+                          },
+                        ),
+                      ),
+                      const Divider(),
+                      SwitchListTile(
+                        title: Text(
+                          "Other (type your own)",
+                          style: GoogleFonts.dmSans(),
+                        ),
+                        value: tempOther,
+                        onChanged: (val) {
+                          setModalState(() {
+                            tempOther = val;
+                            final text = tempController.text.trim();
+                            final count = (tempOther && text.isNotEmpty)
+                                ? 1
+                                : 0;
+                            final maxAllowed = 4 - count;
+                            while (temp.length > maxAllowed) {
+                              temp.remove(temp.last);
+                            }
+                          });
+                        },
+                      ),
+                      if (tempOther)
+                        TextField(
+                          controller: tempController,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            hintText:
+                                "Describe your scene (e.g., twilight rooftop café)",
+                            border: OutlineInputBorder(),
+                          ),
+                          onChanged: (_) {
+                            setModalState(() {
+                              if (tempOther) {
+                                final text = tempController.text.trim();
+                                final count = text.isNotEmpty ? 1 : 0;
+                                final maxAllowed = 4 - count;
+                                while (temp.length > maxAllowed) {
+                                  temp.remove(temp.last);
+                                }
+                              }
+                            });
+                          },
+                        ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            final customText = tempController.text.trim();
+                            final int customCount =
+                                (tempOther && customText.isNotEmpty) ? 1 : 0;
+                            while (temp.length + customCount > 4) {
+                              temp.remove(temp.last);
+                            }
+                            setState(() {
+                              _chosenScenes
+                                ..clear()
+                                ..addAll(temp);
+                              _customSceneEnabled = tempOther;
+                              _customSceneController.text = customText;
+                            });
+                            Navigator.pop(context);
+                          },
+                          child: const Text("Done"),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 
@@ -533,9 +775,20 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
                     IconButton(
-                      onPressed: _saveImages,
-                      icon: const Icon(Icons.save_alt),
-                      tooltip: "Save all to Gallery",
+                      onPressed: _isSaving ? null : _saveImages,
+                      icon: _isSaving
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.black,
+                                ),
+                              ),
+                            )
+                          : const Icon(Icons.save_alt),
+                      tooltip: _isSaving ? "Saving..." : "Save all to Gallery",
                     ),
                   ],
                 ),
@@ -638,6 +891,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _saveImages() async {
     try {
+      setState(() => _isSaving = true);
       // Save generated images
       for (String url in _generatedImageUrls) {
         await GallerySaver.saveImage(url, albumName: "Ergodic Remix");
@@ -651,6 +905,8 @@ class _HomeScreenState extends State<HomeScreen>
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text("Failed to save images: $e")));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -663,7 +919,7 @@ class _HomeScreenState extends State<HomeScreen>
         child: ElevatedButton(
           onPressed: _selectedImage == null
               ? _showImagePickerOptions
-              : _generate,
+              : (!_hasSelectedScenes() ? _openScenePicker : _generate),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.black,
             foregroundColor: Colors.white,
@@ -673,7 +929,9 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
           child: Text(
-            _selectedImage == null ? "Pick a Photo" : "Generate Magic",
+            _selectedImage == null
+                ? "Pick a Photo"
+                : (!_hasSelectedScenes() ? "Select Scenes" : "Generate Magic"),
             style: GoogleFonts.dmSans(
               fontSize: 18,
               fontWeight: FontWeight.w600,
