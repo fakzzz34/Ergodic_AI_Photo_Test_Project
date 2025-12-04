@@ -948,7 +948,7 @@ class _HomeScreenState extends State<HomeScreen>
                 const SizedBox(height: 12),
                 if (_selectedImage != null)
                   Container(
-                    height: 200,
+                    height: MediaQuery.of(context).size.width,
                     width: double.infinity,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(24),
