@@ -58,4 +58,28 @@ class StorageService {
       throw e;
     }
   }
+
+  Future<String?> uploadOriginalImageBytes(
+    Uint8List data,
+    String userId,
+  ) async {
+    try {
+      final String fileName = '${_uuid.v4()}.jpg';
+      final Reference ref = _storage.ref().child(
+        'users/$userId/uploads/$fileName',
+      );
+
+      final UploadTask uploadTask = ref.putData(
+        data,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+      final TaskSnapshot snapshot = await uploadTask;
+
+      final String downloadUrl = await snapshot.ref.getDownloadURL();
+      return downloadUrl;
+    } catch (e) {
+      print("Error uploading original image bytes: $e");
+      throw e;
+    }
+  }
 }

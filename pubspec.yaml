@@ -48,6 +48,7 @@ dependencies:
     http: ^1.6.0
     firebase_vertexai: ^2.2.0
     firebase_ai: ^3.6.0
+    flutter_image_compress: ^2.3.0
 
 dev_dependencies:
     flutter_test:

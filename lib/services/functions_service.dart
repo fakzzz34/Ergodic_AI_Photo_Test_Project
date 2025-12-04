@@ -1,9 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:math';
 import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import '../firebase_options.dart';
 import 'storage_service.dart';
 import 'firestore_service.dart';
@@ -31,15 +31,51 @@ class FunctionsService {
         // Already initialized
       }
 
-      // 1. Upload Original Image to Firebase Storage
+      // 1. Compress input and upload Original Image to Firebase Storage
       String? originalImageUrl;
+      Uint8List imageBytes;
       try {
+        final int tComp0 = DateTime.now().millisecondsSinceEpoch;
+        final List<int>? compressed =
+            await FlutterImageCompress.compressWithFile(
+              imageFile.path,
+              minWidth: 1280,
+              minHeight: 1280,
+              quality: 80,
+              format: CompressFormat.jpeg,
+            );
+        final int tComp1 = DateTime.now().millisecondsSinceEpoch;
+        debugPrint(
+          '[generateImages] compress ${tComp1 - tComp0}ms size=${compressed?.length ?? 0}',
+        );
+        imageBytes = Uint8List.fromList(
+          compressed ?? await imageFile.readAsBytes(),
+        );
         final int tUp0 = DateTime.now().millisecondsSinceEpoch;
-        originalImageUrl = await _storageService.uploadImage(imageFile, userId);
+        originalImageUrl = await _storageService.uploadOriginalImageBytes(
+          imageBytes,
+          userId,
+        );
         final int tUp1 = DateTime.now().millisecondsSinceEpoch;
         debugPrint('[generateImages] original upload ${tUp1 - tUp0}ms');
       } catch (e) {
-        debugPrint("[generateImages] Error uploading original image: $e");
+        debugPrint("[generateImages] Error compress/upload original: $e");
+        // Fallback to direct file upload
+        try {
+          final int tUp0 = DateTime.now().millisecondsSinceEpoch;
+          originalImageUrl = await _storageService.uploadImage(
+            imageFile,
+            userId,
+          );
+          final int tUp1 = DateTime.now().millisecondsSinceEpoch;
+          debugPrint(
+            '[generateImages] original upload (fallback) ${tUp1 - tUp0}ms',
+          );
+          imageBytes = await imageFile.readAsBytes();
+        } catch (e2) {
+          debugPrint('[generateImages] fallback upload failed: $e2');
+          imageBytes = await imageFile.readAsBytes();
+        }
       }
 
       final scenePool = [
@@ -71,15 +107,12 @@ class FunctionsService {
       }
       final promptText =
           'Create 4 separate photorealistic images of this person in these scenes: '
-          '(1) ${scenesToUse[0]}, (2) ${scenesToUse[1]}, (3) ${scenesToUse[2]}, (4) ${scenesToUse[3]}. '
+          'Use these distinct scenes: (1) ${scenesToUse[0]}, (2) ${scenesToUse[1]}, (3) ${scenesToUse[2]}, (4) ${scenesToUse[3]}. '
           'Keep facial identity and hairstyle. Do not make collages or grids. Return 4 images.';
 
-      final Uint8List imageBytes = await imageFile.readAsBytes();
       debugPrint('[generateImages] input bytes ${imageBytes.length}');
       // Simple mime type detection
-      final String mimeType = imageFile.path.toLowerCase().endsWith('.png')
-          ? 'image/png'
-          : 'image/jpeg';
+      final String mimeType = 'image/jpeg';
 
       final model = FirebaseAI.googleAI().generativeModel(
         model: 'gemini-2.5-flash-image',
@@ -99,7 +132,9 @@ class FunctionsService {
       final int tGen0 = DateTime.now().millisecondsSinceEpoch;
       final response = await model.generateContent([content]);
       final int tGen1 = DateTime.now().millisecondsSinceEpoch;
-      debugPrint('[generateImages] primary generateContent ${tGen1 - tGen0}ms parts=${response.inlineDataParts.length}');
+      debugPrint(
+        '[generateImages] primary generateContent ${tGen1 - tGen0}ms parts=${response.inlineDataParts.length}',
+      );
 
       if (response.inlineDataParts.isNotEmpty) {
         for (final part in response.inlineDataParts.take(4)) {
@@ -121,19 +156,25 @@ class FunctionsService {
           final List<String> batch = List<String>.from(scenesToUse);
           final futures = batch.map((s) async {
             final c = Content.multi([
-              TextPart('Create a single photorealistic image of this person in this scene: $s. Keep identity and hairstyle. No collages.'),
+              TextPart(
+                'Create a single photorealistic image of this person in this scene: $s. Keep identity and hairstyle. No collages.',
+              ),
               InlineDataPart(mimeType, imageBytes),
             ]);
             final int tGenS0 = DateTime.now().millisecondsSinceEpoch;
             final r = await model.generateContent([c]);
             final int tGenS1 = DateTime.now().millisecondsSinceEpoch;
-            debugPrint('[generateImages] per-scene "$s" ${tGenS1 - tGenS0}ms parts=${r.inlineDataParts.length}');
+            debugPrint(
+              '[generateImages] per-scene "$s" ${tGenS1 - tGenS0}ms parts=${r.inlineDataParts.length}',
+            );
             if (r.inlineDataParts.isNotEmpty) {
               final bytes = r.inlineDataParts.first.bytes;
               final int tUpS0 = DateTime.now().millisecondsSinceEpoch;
               final url = await _storageService.uploadImageBytes(bytes, userId);
               final int tUpS1 = DateTime.now().millisecondsSinceEpoch;
-              debugPrint('[generateImages] per-scene upload ${tUpS1 - tUpS0}ms');
+              debugPrint(
+                '[generateImages] per-scene upload ${tUpS1 - tUpS0}ms',
+              );
               return url;
             }
             return null;
@@ -173,7 +214,9 @@ class FunctionsService {
 
       if (firebaseUrls.isNotEmpty) {
         final int tEnd = DateTime.now().millisecondsSinceEpoch;
-        debugPrint('[generateImages] total ${tEnd - tStart}ms, returned ${firebaseUrls.length} images');
+        debugPrint(
+          '[generateImages] total ${tEnd - tStart}ms, returned ${firebaseUrls.length} images',
+        );
         return firebaseUrls;
       }
 
