@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:math';
 import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import '../firebase_options.dart';
 import 'storage_service.dart';
 import 'firestore_service.dart';
@@ -19,6 +20,8 @@ class FunctionsService {
     List<String> scenes,
   ) async {
     try {
+      final int tStart = DateTime.now().millisecondsSinceEpoch;
+      debugPrint('[generateImages] start');
       // Ensure Firebase is initialized (it usually is in main, but good to be safe)
       try {
         await Firebase.initializeApp(
@@ -31,9 +34,12 @@ class FunctionsService {
       // 1. Upload Original Image to Firebase Storage
       String? originalImageUrl;
       try {
+        final int tUp0 = DateTime.now().millisecondsSinceEpoch;
         originalImageUrl = await _storageService.uploadImage(imageFile, userId);
+        final int tUp1 = DateTime.now().millisecondsSinceEpoch;
+        debugPrint('[generateImages] original upload ${tUp1 - tUp0}ms');
       } catch (e) {
-        print("Error uploading original image: $e");
+        debugPrint("[generateImages] Error uploading original image: $e");
       }
 
       final scenePool = [
@@ -64,13 +70,12 @@ class FunctionsService {
         scenesToUse.removeRange(4, scenesToUse.length);
       }
       final promptText =
-          'Generate exactly 4 separate, standalone photorealistic images from this portrait. '
-          'Use these distinct scenes: (1) ${scenesToUse[0]}, (2) ${scenesToUse[1]}, (3) ${scenesToUse[2]}, (4) ${scenesToUse[3]}. '
-          'Maintain the person’s facial identity and hairstyle. High quality, Instagram-ready composition. '
-          'Do NOT combine multiple scenes into a single collage, grid, split-screen, or multi-panel image. '
-          'Return 4 image outputs only.';
+          'Create 4 separate photorealistic images of this person in these scenes: '
+          '(1) ${scenesToUse[0]}, (2) ${scenesToUse[1]}, (3) ${scenesToUse[2]}, (4) ${scenesToUse[3]}. '
+          'Keep facial identity and hairstyle. Do not make collages or grids. Return 4 images.';
 
       final Uint8List imageBytes = await imageFile.readAsBytes();
+      debugPrint('[generateImages] input bytes ${imageBytes.length}');
       // Simple mime type detection
       final String mimeType = imageFile.path.toLowerCase().endsWith('.png')
           ? 'image/png'
@@ -91,12 +96,18 @@ class FunctionsService {
         InlineDataPart(mimeType, imageBytes),
       ]);
 
+      final int tGen0 = DateTime.now().millisecondsSinceEpoch;
       final response = await model.generateContent([content]);
+      final int tGen1 = DateTime.now().millisecondsSinceEpoch;
+      debugPrint('[generateImages] primary generateContent ${tGen1 - tGen0}ms parts=${response.inlineDataParts.length}');
 
       if (response.inlineDataParts.isNotEmpty) {
         for (final part in response.inlineDataParts.take(4)) {
           final bytes = part.bytes;
+          final int tUpI0 = DateTime.now().millisecondsSinceEpoch;
           final url = await _storageService.uploadImageBytes(bytes, userId);
+          final int tUpI1 = DateTime.now().millisecondsSinceEpoch;
+          debugPrint('[generateImages] image upload ${tUpI1 - tUpI0}ms');
           if (url != null) {
             firebaseUrls.add(url);
           }
@@ -106,22 +117,32 @@ class FunctionsService {
       if (firebaseUrls.length < 4) {
         final used = <String>{...scenesToUse};
         int attempts = 0;
-        while (firebaseUrls.length < 4 && attempts < 6) {
-          for (final s in scenesToUse) {
-            if (firebaseUrls.length >= 4) break;
+        while (firebaseUrls.length < 4 && attempts < 2) {
+          final List<String> batch = List<String>.from(scenesToUse);
+          final futures = batch.map((s) async {
             final c = Content.multi([
-              TextPart(
-                'Generate a standalone photorealistic image from this portrait in the following scene: $s. Maintain the person’s facial identity and hairstyle. High quality, Instagram-ready composition. Do NOT combine multiple scenes into a collage, grid, split-screen, or multi-panel image. Return image outputs only.',
-              ),
+              TextPart('Create a single photorealistic image of this person in this scene: $s. Keep identity and hairstyle. No collages.'),
               InlineDataPart(mimeType, imageBytes),
             ]);
+            final int tGenS0 = DateTime.now().millisecondsSinceEpoch;
             final r = await model.generateContent([c]);
+            final int tGenS1 = DateTime.now().millisecondsSinceEpoch;
+            debugPrint('[generateImages] per-scene "$s" ${tGenS1 - tGenS0}ms parts=${r.inlineDataParts.length}');
             if (r.inlineDataParts.isNotEmpty) {
               final bytes = r.inlineDataParts.first.bytes;
+              final int tUpS0 = DateTime.now().millisecondsSinceEpoch;
               final url = await _storageService.uploadImageBytes(bytes, userId);
-              if (url != null) {
-                firebaseUrls.add(url);
-              }
+              final int tUpS1 = DateTime.now().millisecondsSinceEpoch;
+              debugPrint('[generateImages] per-scene upload ${tUpS1 - tUpS0}ms');
+              return url;
+            }
+            return null;
+          });
+          final results = await Future.wait(futures);
+          for (final url in results) {
+            if (url != null) {
+              firebaseUrls.add(url);
+              if (firebaseUrls.length >= 4) break;
             }
           }
           if (firebaseUrls.length < 4) {
@@ -140,20 +161,25 @@ class FunctionsService {
 
       // 4. Store Metadata in Firestore
       if (firebaseUrls.isNotEmpty && originalImageUrl != null) {
+        final int tFs0 = DateTime.now().millisecondsSinceEpoch;
         await _firestoreService.saveRemix(
           userId: userId,
           originalImageUrl: originalImageUrl,
           generatedImageUrls: firebaseUrls,
         );
+        final int tFs1 = DateTime.now().millisecondsSinceEpoch;
+        debugPrint('[generateImages] firestore save ${tFs1 - tFs0}ms');
       }
 
       if (firebaseUrls.isNotEmpty) {
+        final int tEnd = DateTime.now().millisecondsSinceEpoch;
+        debugPrint('[generateImages] total ${tEnd - tStart}ms, returned ${firebaseUrls.length} images');
         return firebaseUrls;
       }
 
       return _getMockImages();
     } catch (e) {
-      print("Error calling Gemini: $e");
+      debugPrint("[generateImages] Error calling Gemini: $e");
       return _getMockImages();
     }
   }
