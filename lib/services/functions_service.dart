@@ -14,14 +14,42 @@ class FunctionsService {
   final StorageService _storageService = StorageService();
   final FirestoreService _firestoreService = FirestoreService();
 
+  String _hintForScene(String s) {
+    final q = s.toLowerCase();
+    if (q.contains('sail') || q.contains('boat')) {
+      return 'open water/ocean, clearly visible sailboat with mast, hull and sails, horizon line; no indoor café, no street, no buildings dominant.';
+    }
+    if (q.contains('rooftop') || q.contains('skyline')) {
+      return 'city skyline lights at night, rooftop elements (parapet, railings), deep blue/black sky; no beach, no water body.';
+    }
+    if (q.contains('beach')) {
+      return 'bright daylight, sand and shoreline, ocean waves, sunlit skin tones; no indoor environment, no café elements.';
+    }
+    if (q.contains('café')) {
+      return 'indoor café interior, tables, cups, warm lighting, shallow depth-of-field; no beach or water, no city skyline.';
+    }
+    if (q.contains('forest') || q.contains('trail')) {
+      return 'trees, path/trail, natural dappled light, greenery; no indoor elements, no cityscape.';
+    }
+    if (q.contains('waterfall')) {
+      return 'tropical greenery, visible waterfall, mist, rocks; no indoor, no city street.';
+    }
+    if (q.contains('mountain')) {
+      return 'mountain backdrop, outdoors, cooler tones, sky and peaks; no beach, no indoor.';
+    }
+    return 'include distinct visual cues that unambiguously match the scene keywords; avoid unrelated indoor elements.';
+  }
+
   Future<List<String>> generateImages(
     File imageFile,
     String userId,
-    List<String> scenes,
-  ) async {
+    List<String> scenes, {
+    void Function(String)? onProgress,
+  }) async {
     try {
       final int tStart = DateTime.now().millisecondsSinceEpoch;
       debugPrint('[generateImages] start');
+      onProgress?.call('Preparing your photo');
       // Ensure Firebase is initialized (it usually is in main, but good to be safe)
       try {
         await Firebase.initializeApp(
@@ -39,15 +67,17 @@ class FunctionsService {
         final List<int>? compressed =
             await FlutterImageCompress.compressWithFile(
               imageFile.path,
-              minWidth: 1280,
-              minHeight: 1280,
-              quality: 80,
+              minWidth: 1024,
+              minHeight: 1024,
+              quality: 75,
+              keepExif: false,
               format: CompressFormat.jpeg,
             );
         final int tComp1 = DateTime.now().millisecondsSinceEpoch;
         debugPrint(
           '[generateImages] compress ${tComp1 - tComp0}ms size=${compressed?.length ?? 0}',
         );
+        onProgress?.call('Optimizing photo (${tComp1 - tComp0}ms)');
         imageBytes = Uint8List.fromList(
           compressed ?? await imageFile.readAsBytes(),
         );
@@ -58,6 +88,7 @@ class FunctionsService {
         );
         final int tUp1 = DateTime.now().millisecondsSinceEpoch;
         debugPrint('[generateImages] original upload ${tUp1 - tUp0}ms');
+        onProgress?.call('Uploading photo (${tUp1 - tUp0}ms)');
       } catch (e) {
         debugPrint("[generateImages] Error compress/upload original: $e");
         // Fallback to direct file upload
@@ -71,6 +102,7 @@ class FunctionsService {
           debugPrint(
             '[generateImages] original upload (fallback) ${tUp1 - tUp0}ms',
           );
+          onProgress?.call('Uploading photo (${tUp1 - tUp0}ms)');
           imageBytes = await imageFile.readAsBytes();
         } catch (e2) {
           debugPrint('[generateImages] fallback upload failed: $e2');
@@ -105,10 +137,7 @@ class FunctionsService {
       } else if (scenesToUse.length > 4) {
         scenesToUse.removeRange(4, scenesToUse.length);
       }
-      final promptText =
-          'Create 4 separate photorealistic images of this person in these scenes: '
-          'Use these distinct scenes: (1) ${scenesToUse[0]}, (2) ${scenesToUse[1]}, (3) ${scenesToUse[2]}, (4) ${scenesToUse[3]}. '
-          'Keep facial identity and hairstyle. Do not make collages or grids. Return 4 images.';
+      // Per-scene prompts will be used for accuracy; batch prompt removed for speed and consistency
 
       debugPrint('[generateImages] input bytes ${imageBytes.length}');
       // Simple mime type detection
@@ -123,31 +152,8 @@ class FunctionsService {
 
       List<String> firebaseUrls = [];
 
-      // 3. Generate with a single request and collect up to 4 images
-      final content = Content.multi([
-        TextPart(promptText),
-        InlineDataPart(mimeType, imageBytes),
-      ]);
-
-      final int tGen0 = DateTime.now().millisecondsSinceEpoch;
-      final response = await model.generateContent([content]);
-      final int tGen1 = DateTime.now().millisecondsSinceEpoch;
-      debugPrint(
-        '[generateImages] primary generateContent ${tGen1 - tGen0}ms parts=${response.inlineDataParts.length}',
-      );
-
-      if (response.inlineDataParts.isNotEmpty) {
-        for (final part in response.inlineDataParts.take(4)) {
-          final bytes = part.bytes;
-          final int tUpI0 = DateTime.now().millisecondsSinceEpoch;
-          final url = await _storageService.uploadImageBytes(bytes, userId);
-          final int tUpI1 = DateTime.now().millisecondsSinceEpoch;
-          debugPrint('[generateImages] image upload ${tUpI1 - tUpI0}ms');
-          if (url != null) {
-            firebaseUrls.add(url);
-          }
-        }
-      }
+      // 3. Generate per scene concurrently for higher accuracy and less duplication
+      onProgress?.call('Generating scenes');
 
       if (firebaseUrls.length < 4) {
         final used = <String>{...scenesToUse};
@@ -157,7 +163,11 @@ class FunctionsService {
           final futures = batch.map((s) async {
             final c = Content.multi([
               TextPart(
-                'Create a single photorealistic image of this person in this scene: $s. Keep identity and hairstyle. No collages.',
+                'Generate one portrait photo of the same person from the attached image in the scene: $s. '
+                'Requirements: single person, medium shot, keep facial identity and hairstyle; '
+                'replace background/environment to that scene with accurate time-of-day cues; photorealistic; '
+                'no collage/grids, no extra people, no text/watermarks. '
+                'Scene details: ${_hintForScene(s)}. Return a single image.',
               ),
               InlineDataPart(mimeType, imageBytes),
             ]);
@@ -167,6 +177,9 @@ class FunctionsService {
             debugPrint(
               '[generateImages] per-scene "$s" ${tGenS1 - tGenS0}ms parts=${r.inlineDataParts.length}',
             );
+            onProgress?.call(
+              'Generating image with "$s" (${tGenS1 - tGenS0}ms)',
+            );
             if (r.inlineDataParts.isNotEmpty) {
               final bytes = r.inlineDataParts.first.bytes;
               final int tUpS0 = DateTime.now().millisecondsSinceEpoch;
@@ -175,6 +188,7 @@ class FunctionsService {
               debugPrint(
                 '[generateImages] per-scene upload ${tUpS1 - tUpS0}ms',
               );
+              onProgress?.call('Saving image (${tUpS1 - tUpS0}ms)');
               return url;
             }
             return null;
@@ -210,6 +224,7 @@ class FunctionsService {
         );
         final int tFs1 = DateTime.now().millisecondsSinceEpoch;
         debugPrint('[generateImages] firestore save ${tFs1 - tFs0}ms');
+        onProgress?.call('Saving details (${tFs1 - tFs0}ms)');
       }
 
       if (firebaseUrls.isNotEmpty) {
@@ -217,6 +232,7 @@ class FunctionsService {
         debugPrint(
           '[generateImages] total ${tEnd - tStart}ms, returned ${firebaseUrls.length} images',
         );
+        onProgress?.call('Done (${tEnd - tStart}ms)');
         return firebaseUrls;
       }
 

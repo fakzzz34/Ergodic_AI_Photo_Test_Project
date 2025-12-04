@@ -29,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen>
   List<String> _generatedImageUrls = [];
   bool _isSaving = false;
   late AnimationController _controller;
+  String _loadingMessage = "";
   final Map<String, String> _sceneEmojis = const {
     'café setting': '☕️',
     'city travel street': '🏙️',
@@ -129,6 +130,7 @@ class _HomeScreenState extends State<HomeScreen>
     setState(() {
       _status = AppStatus.generating;
       _errorMessage = null;
+      _loadingMessage = "Preparing your photo";
     });
 
     try {
@@ -157,6 +159,12 @@ class _HomeScreenState extends State<HomeScreen>
         _selectedImage!,
         user.uid,
         scenes,
+        onProgress: (msg) {
+          if (!mounted) return;
+          setState(() {
+            _loadingMessage = msg;
+          });
+        },
       );
 
       setState(() {
@@ -726,20 +734,32 @@ class _HomeScreenState extends State<HomeScreen>
                                       30,
                                     ),
                                   ),
-                                  onSelected: (val) {
-                                    setModalState(() {
-                                      tempOther = val;
-                                      final text = tempController.text.trim();
-                                      final count =
-                                          (tempOther && text.isNotEmpty)
-                                          ? 1
-                                          : 0;
-                                      final maxAllowed = 4 - count;
-                                      while (temp.length > maxAllowed) {
-                                        temp.remove(temp.last);
-                                      }
-                                    });
-                                  },
+                                  onSelected:
+                                      ((temp.length +
+                                                  ((tempOther &&
+                                                          tempController.text
+                                                              .trim()
+                                                              .isNotEmpty)
+                                                      ? 1
+                                                      : 0)) >=
+                                              4 &&
+                                          !tempOther)
+                                      ? null
+                                      : (val) {
+                                          setModalState(() {
+                                            tempOther = val;
+                                            final text = tempController.text
+                                                .trim();
+                                            final count =
+                                                (tempOther && text.isNotEmpty)
+                                                ? 1
+                                                : 0;
+                                            final maxAllowed = 4 - count;
+                                            while (temp.length > maxAllowed) {
+                                              temp.remove(temp.last);
+                                            }
+                                          });
+                                        },
                                 ),
                               ],
                             ),
@@ -921,6 +941,11 @@ class _HomeScreenState extends State<HomeScreen>
           Text(
             "This usually takes 5-10 seconds",
             style: GoogleFonts.dmSans(fontSize: 14, color: Colors.grey[500]),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _loadingMessage,
+            style: GoogleFonts.dmSans(fontSize: 12, color: Colors.grey[500]),
           ),
         ],
       ),
